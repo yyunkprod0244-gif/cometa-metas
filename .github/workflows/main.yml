@@ -1,0 +1,88 @@
+# Pipeline de CI/CD do Cometa
+#
+# CI  -> roda em todo push e pull request na main:
+#        instala dependências, lint, testes e build.
+# CD  -> roda só em push na main (depois do CI passar):
+#        publica a pasta dist/ no GitHub Pages.
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Permite rodar manualmente pela aba Actions (botão "Run workflow")
+  workflow_dispatch:
+
+# Permissão mínima por padrão; o job de deploy pede o que precisa
+permissions:
+  contents: read
+
+# Evita execuções duplicadas: em PR cancela a anterior;
+# na main deixa o deploy em andamento terminar.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: CI · lint, testes e build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Rodar lint (ESLint)
+        run: npm run lint
+
+      - name: Rodar testes (Vitest)
+        run: npm run test
+
+      - name: Gerar build (Vite)
+        run: npm run build
+        env:
+          # Mostrado no rodapé do site para conferir qual commit está no ar
+          VITE_COMMIT_SHA: ${{ github.sha }}
+
+      - name: Enviar build para o GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: CD · deploy no GitHub Pages
+    needs: ci
+    # Pull requests só validam; publicar é só na main
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write # publicar no GitHub Pages
+      id-token: write # provar a origem do deploy (OIDC)
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Publicar site
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          # Secret criado automaticamente pelo GitHub em cada execução
+          token: ${{ secrets.GITHUB_TOKEN }}
